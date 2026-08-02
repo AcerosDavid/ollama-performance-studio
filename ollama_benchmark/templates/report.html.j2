@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ollama Benchmark Report - Session {{ session_id }}</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            color: #2c3e50;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+        }
+
+        h2 {
+            color: #34495e;
+            margin-top: 30px;
+            margin-bottom: 15px;
+            font-size: 1.8em;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+        }
+
+        h3 {
+            color: #555;
+            margin-top: 20px;
+            margin-bottom: 10px;
+            font-size: 1.3em;
+        }
+
+        .metadata {
+            background: #ecf0f1;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+
+        .metadata-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+        }
+
+        .metadata-item {
+            padding: 8px;
+        }
+
+        .metadata-label {
+            font-weight: bold;
+            color: #7f8c8d;
+        }
+
+        .metadata-value {
+            color: #2c3e50;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            background: white;
+        }
+
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+
+        th {
+            background: #3498db;
+            color: white;
+            font-weight: bold;
+        }
+
+        tr:hover {
+            background: #f5f5f5;
+        }
+
+        .status-completed { color: #27ae60; font-weight: bold; }
+        .status-incomplete { color: #f39c12; font-weight: bold; }
+        .status-failed, .status-skipped { color: #e74c3c; font-weight: bold; }
+
+        .rank-badge {
+            display: inline-block;
+            width: 28px;
+            height: 28px;
+            line-height: 28px;
+            text-align: center;
+            border-radius: 50%;
+            background: #95a5a6;
+            color: white;
+            font-weight: bold;
+            font-size: 0.85em;
+        }
+        .rank-1 { background: #f1c40f; color: #333; }
+        .rank-2 { background: #bdc3c7; color: #333; }
+        .rank-3 { background: #cd7f32; }
+
+        .metric-value {
+            font-family: 'Courier New', monospace;
+            font-weight: 600;
+        }
+
+        .chart-container {
+            margin: 20px 0;
+            min-height: 320px;
+        }
+
+        .recommendations {
+            display: grid;
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        .recommendation-item {
+            background: #eaf6ff;
+            border-left: 4px solid #3498db;
+            padding: 15px;
+            border-radius: 4px;
+        }
+
+        .recommendation-profile {
+            font-weight: bold;
+            color: #2980b9;
+            margin-bottom: 5px;
+        }
+
+        .recommendation-model {
+            font-size: 1.1em;
+            margin-bottom: 5px;
+        }
+
+        .recommendation-justification {
+            color: #555;
+        }
+
+        .footer {
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #ddd;
+            text-align: center;
+            color: #7f8c8d;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Ollama Benchmark Report</h1>
+        <p>Session ID: <strong>{{ session_id }}</strong> | Generated: {{ timestamp }}</p>
+
+        <div class="metadata">
+            <h3>Hardware Information</h3>
+            <div class="metadata-grid">
+                <div class="metadata-item">
+                    <div class="metadata-label">OS:</div>
+                    <div class="metadata-value">{{ hardware.os }}</div>
+                </div>
+                <div class="metadata-item">
+                    <div class="metadata-label">Python:</div>
+                    <div class="metadata-value">{{ hardware.python_version }}</div>
+                </div>
+                <div class="metadata-item">
+                    <div class="metadata-label">Ollama:</div>
+                    <div class="metadata-value">{{ hardware.ollama_version }}</div>
+                </div>
+                <div class="metadata-item">
+                    <div class="metadata-label">CPU Cores:</div>
+                    <div class="metadata-value">{{ hardware.cpu_cores }}</div>
+                </div>
+                <div class="metadata-item">
+                    <div class="metadata-label">CPU MHz:</div>
+                    <div class="metadata-value">{{ hardware.cpu_mhz }}</div>
+                </div>
+                <div class="metadata-item">
+                    <div class="metadata-label">RAM:</div>
+                    <div class="metadata-value">{{ hardware.ram_mb }} MB</div>
+                </div>
+                <div class="metadata-item">
+                    <div class="metadata-label">GPU:</div>
+                    <div class="metadata-value">{{ "Yes" if hardware.has_gpu else "No" }}</div>
+                </div>
+                {% if hardware.has_gpu %}
+                <div class="metadata-item">
+                    <div class="metadata-label">VRAM:</div>
+                    <div class="metadata-value">{{ hardware.vram_mb }} MB</div>
+                </div>
+                {% endif %}
+                <div class="metadata-item">
+                    <div class="metadata-label">Disk Free:</div>
+                    <div class="metadata-value">{{ hardware.disk_free_mb }} MB</div>
+                </div>
+            </div>
+        </div>
+
+        <h2>Overall Rankings</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Rank</th>
+                    <th>Model</th>
+                    <th>Overall Score</th>
+                    <th>Status</th>
+                    <th>Quality</th>
+                    <th>TPS</th>
+                    <th>Avg RAM (MB)</th>
+                    <th>Stability</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for model in overall_ranking %}
+                <tr>
+                    <td><span class="rank-badge rank-{{ loop.index }}">{{ loop.index }}</span></td>
+                    <td><strong>{{ model.model_name }}</strong></td>
+                    <td class="metric-value">{{ "%.3f"|format(model.overall_rank) if model.overall_rank is not none else "N/A" }}</td>
+                    <td class="status-{{ model.status }}">{{ model.status }}</td>
+                    <td class="metric-value">{{ "%.3f"|format(model.quality_score) if model.quality_score is not none else "N/A" }}</td>
+                    <td class="metric-value">{{ "%.2f"|format(model.avg_tps) if model.avg_tps is not none else "N/A" }}</td>
+                    <td class="metric-value">{{ "%.1f"|format(model.avg_ram_mb) if model.avg_ram_mb is not none else "N/A" }}</td>
+                    <td class="metric-value">{{ "%.3f"|format(model.robustness.stability_score) if model.robustness else "N/A" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <h2>Performance Metrics</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Model</th>
+                    <th>TTFT (ms)</th>
+                    <th>Avg Latency (ms)</th>
+                    <th>Tokens/sec</th>
+                    <th>Cold Start (s)</th>
+                    <th>Download Time (s)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for model in model_results %}
+                <tr>
+                    <td><strong>{{ model.model_name }}</strong></td>
+                    <td class="metric-value">{{ "%.2f"|format(model.avg_ttft_ms) if model.avg_ttft_ms is not none else "N/A" }}</td>
+                    <td class="metric-value">{{ "%.2f"|format(model.avg_latency_ms) if model.avg_latency_ms is not none else "N/A" }}</td>
+                    <td class="metric-value">{{ "%.2f"|format(model.avg_tps) if model.avg_tps is not none else "N/A" }}</td>
+                    <td class="metric-value">{{ "%.2f"|format(model.cold_start_s) if model.cold_start_s is not none else "N/A" }}</td>
+                    <td class="metric-value">{{ "%.2f"|format(model.download_time_s) if model.download_time_s is not none else "N/A" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <h2>Quality Scores by Category</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Model</th>
+                    {% for category in categories %}
+                    <th>{{ category }}</th>
+                    {% endfor %}
+                    <th>Global</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for model in model_results %}
+                <tr>
+                    <td><strong>{{ model.model_name }}</strong></td>
+                    {% for category in categories %}
+                    <td class="metric-value">{{ "%.3f"|format(model.quality_scores.get(category)) if model.quality_scores and model.quality_scores.get(category) is not none else "N/A" }}</td>
+                    {% endfor %}
+                    <td class="metric-value">{{ "%.3f"|format(model.quality_score) if model.quality_score is not none else "N/A" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <h2>Efficiency Indices</h2>
+        <div class="chart-container">
+            <div id="efficiency-chart"></div>
+        </div>
+
+        <h2>Resource Consumption Over Time</h2>
+        {% for model in model_results %}
+        {% if model.resource_timeseries %}
+        <h3>{{ model.model_name }}</h3>
+        <div class="chart-container">
+            <div id="resource-chart-{{ loop.index }}"></div>
+        </div>
+        {% endif %}
+        {% endfor %}
+
+        <h2>Robustness Metrics</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Model</th>
+                    <th>Total Errors</th>
+                    <th>Timeouts</th>
+                    <th>OOM Count</th>
+                    <th>Restarts</th>
+                    <th>Incomplete Prompts</th>
+                    <th>Stability Score</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for model in model_results %}
+                <tr>
+                    <td><strong>{{ model.model_name }}</strong></td>
+                    <td class="metric-value">{{ model.robustness.total_errors if model.robustness else 0 }}</td>
+                    <td class="metric-value">{{ model.robustness.total_timeouts if model.robustness else 0 }}</td>
+                    <td class="metric-value">{{ model.robustness.oom_count if model.robustness else 0 }}</td>
+                    <td class="metric-value">{{ model.robustness.restart_count if model.robustness else 0 }}</td>
+                    <td class="metric-value">{{ model.robustness.incomplete_prompts if model.robustness else 0 }}</td>
+                    <td class="metric-value">{{ "%.3f"|format(model.robustness.stability_score) if model.robustness else "N/A" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <h2>Specialized Rankings</h2>
+
+        <h3>Fastest by Tokens/Second</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Rank</th>
+                    <th>Model</th>
+                    <th>Tokens/sec</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for model in tps_ranking %}
+                <tr>
+                    <td><span class="rank-badge rank-{{ loop.index }}">{{ loop.index }}</span></td>
+                    <td><strong>{{ model.model_name }}</strong></td>
+                    <td class="metric-value">{{ "%.2f"|format(model.avg_tps) if model.avg_tps is not none else "N/A" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <h3>Best Quality</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Rank</th>
+                    <th>Model</th>
+                    <th>Quality Score</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for model in quality_ranking %}
+                <tr>
+                    <td><span class="rank-badge rank-{{ loop.index }}">{{ loop.index }}</span></td>
+                    <td><strong>{{ model.model_name }}</strong></td>
+                    <td class="metric-value">{{ "%.3f"|format(model.quality_score) if model.quality_score is not none else "N/A" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <h3>Lowest RAM Usage</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Rank</th>
+                    <th>Model</th>
+                    <th>Avg RAM (MB)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for model in ram_ranking %}
+                <tr>
+                    <td><span class="rank-badge rank-{{ loop.index }}">{{ loop.index }}</span></td>
+                    <td><strong>{{ model.model_name }}</strong></td>
+                    <td class="metric-value">{{ "%.1f"|format(model.avg_ram_mb) if model.avg_ram_mb is not none else "N/A" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <h3>Best Efficiency Index</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Rank</th>
+                    <th>Model</th>
+                    <th>Overall Rank</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for model in efficiency_ranking %}
+                <tr>
+                    <td><span class="rank-badge rank-{{ loop.index }}">{{ loop.index }}</span></td>
+                    <td><strong>{{ model.model_name }}</strong></td>
+                    <td class="metric-value">{{ "%.3f"|format(model.overall_rank) if model.overall_rank is not none else "N/A" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        {% if recommendations %}
+        <h2>Automatic Recommendations</h2>
+        <div class="recommendations">
+            {% for rec in recommendations %}
+            <div class="recommendation-item">
+                <div class="recommendation-profile">{{ rec.profile }}</div>
+                <div class="recommendation-model">{{ rec.model_name }}</div>
+                <div class="recommendation-justification">{{ rec.justification }}</div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="footer">
+            <p>Generated by ollama-benchmark | Session {{ session_id }} | {{ timestamp }}</p>
+        </div>
+    </div>
+
+    <script>
+    {{ plotly_js|safe }}
+    </script>
+    <script>
+        (function () {
+            var efficiencyData = {{ efficiency_chart_json|safe }};
+            var resourceCharts = {{ resource_chart_json|safe }};
+
+            if (typeof Plotly !== 'undefined' && efficiencyData.names && efficiencyData.names.length) {
+                var traces = [
+                    {
+                        x: efficiencyData.names,
+                        y: efficiencyData.norm_quality_per_ram,
+                        name: 'Quality / RAM',
+                        type: 'bar'
+                    },
+                    {
+                        x: efficiencyData.names,
+                        y: efficiencyData.norm_quality_per_latency,
+                        name: 'Quality / Latency',
+                        type: 'bar'
+                    },
+                    {
+                        x: efficiencyData.names,
+                        y: efficiencyData.norm_quality_per_cpu,
+                        name: 'Quality / CPU',
+                        type: 'bar'
+                    }
+                ];
+                Plotly.newPlot('efficiency-chart', traces, {
+                    barmode: 'group',
+                    title: 'Normalized Efficiency Indices',
+                    margin: { t: 40 }
+                }, {responsive: true, displayModeBar: false});
+            } else {
+                var effEl = document.getElementById('efficiency-chart');
+                if (effEl) {
+                    effEl.innerHTML = '<p style="text-align:center;color:#7f8c8d;padding:40px;">No efficiency data available</p>';
+                }
+            }
+
+            if (typeof Plotly !== 'undefined') {
+                resourceCharts.forEach(function (chart) {
+                    var traces = [
+                        {
+                            x: chart.timestamps,
+                            y: chart.cpu,
+                            name: 'CPU %',
+                            type: 'scatter',
+                            mode: 'lines'
+                        },
+                        {
+                            x: chart.timestamps,
+                            y: chart.ram_mb,
+                            name: 'RAM MB',
+                            type: 'scatter',
+                            mode: 'lines',
+                            yaxis: 'y2'
+                        }
+                    ];
+                    if (chart.vram_mb.some(function (v) { return v !== null && v !== undefined; })) {
+                        traces.push({
+                            x: chart.timestamps,
+                            y: chart.vram_mb,
+                            name: 'VRAM MB',
+                            type: 'scatter',
+                            mode: 'lines',
+                            yaxis: 'y2'
+                        });
+                    }
+                    Plotly.newPlot(chart.element_id, traces, {
+                        title: chart.model_name + ' Resource Usage',
+                        xaxis: { title: 'Time' },
+                        yaxis: { title: 'CPU %', side: 'left' },
+                        yaxis2: {
+                            title: 'Memory (MB)',
+                            overlaying: 'y',
+                            side: 'right'
+                        },
+                        margin: { t: 40 },
+                        legend: { orientation: 'h' }
+                    }, {responsive: true, displayModeBar: false});
+                });
+            }
+        })();
+    </script>
+</body>
+</html>
