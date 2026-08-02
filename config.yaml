@@ -1,0 +1,135 @@
+# ============================================================
+# ollama-performance-studio — sample configuration file
+# Copy this file to your working directory as config.yaml
+# and adjust to your environment.
+# ============================================================
+
+# ---------------------------------------------------------
+# REQUIRED: List of Ollama model tags to evaluate.
+# Each model is pulled, benchmarked, then removed in order.
+# Minimum: 1 model.
+# ---------------------------------------------------------
+models:
+- qwen:0.5b-chat-v1.5-q3_K_M
+- qwen:0.5b-chat-v1.5-q3_K_L
+- qwen:0.5b-chat-v1.5-q4_0
+- qwen:0.5b-chat-v1.5-q4_1
+- qwen:0.5b-chat-v1.5-q4_K_S
+- qwen:0.5b-chat-v1.5-q4_K_M
+
+
+# ---------------------------------------------------------
+# REQUIRED: Prompt categories and their test prompts.
+# Each category contains a list of prompts.
+# `text` is required; `expected_answer` is optional and
+# enables semantic-similarity scoring for that prompt.
+# ---------------------------------------------------------
+prompts:
+  reasoning:
+    - text: "If all roses are flowers and some flowers fade quickly, can we conclude that some roses fade quickly?"
+      expected_answer: "No, that conclusion does not necessarily follow from the premises."
+    - text: "A bat and a ball cost $1.10 in total. The bat costs $1.00 more than the ball. How much does the ball cost?"
+      expected_answer: "The ball costs $0.05."
+
+  coding:
+    - text: "Write a Python function that returns the nth Fibonacci number using memoization."
+      expected_answer: "def fib(n, memo={}): return n if n <= 1 else memo.setdefault(n, fib(n-1)+fib(n-2))"
+    - text: "Explain the difference between a list and a tuple in Python."
+
+  math:
+    - text: "Solve for x: 2x + 5 = 17"
+      expected_answer: "x = 6"
+    - text: "What is the derivative of f(x) = 3x^2 + 2x - 1?"
+      expected_answer: "f'(x) = 6x + 2"
+
+  conversation:
+    - text: "Hello! How are you today?"
+    - text: "What would you recommend for a beginner learning to program?"
+
+  comprehension:
+    - text: >
+        Read the following passage and answer: "The Amazon rainforest produces about 20% of the world's
+        oxygen and is home to 10% of all species on Earth. Deforestation threatens both biodiversity and
+        climate stability." — What are the two main concerns about deforestation mentioned in the passage?
+      expected_answer: "Biodiversity loss and climate instability."
+
+  translation:
+    - text: "Translate the following sentence to French: 'The quick brown fox jumps over the lazy dog.'"
+      expected_answer: "Le rapide renard brun saute par-dessus le chien paresseux."
+
+  summarization:
+    - text: >
+        Summarize in one sentence: "Machine learning is a subset of artificial intelligence that provides
+        systems the ability to automatically learn and improve from experience without being explicitly
+        programmed. It focuses on the development of computer programs that can access data and use it
+        to learn for themselves."
+
+  technical_explanation:
+    - text: "Explain how HTTPS works in simple terms."
+    - text: "What is the CAP theorem in distributed systems?"
+
+  instruction_following:
+    - text: "List exactly 3 benefits of regular exercise, using bullet points."
+    - text: "Write a haiku about software debugging."
+
+  context_usage:
+    - text: >
+        My name is Alex and I work as a data scientist. Given that context, what programming languages
+        would you recommend I learn next and why?
+
+# ---------------------------------------------------------
+# REQUIRED: Timeout settings (seconds, integer, 1–3600).
+# ---------------------------------------------------------
+timeouts:
+  download: 3600      # Maximum time to wait for `ollama pull` to complete
+  cold_start: 120     # Maximum time from model launch to first response
+  inference: 20       # Maximum time per individual prompt inference 
+  judge: 30           # Maximum time to wait for the judge model response
+
+# ---------------------------------------------------------
+# OPTIONAL: LLM judge model for open-ended quality scoring.
+# When configured, this model evaluates responses in place of
+# expected-answer similarity scoring.
+# Comment out to use expected-answer / cosine similarity only.
+# ---------------------------------------------------------
+# judge_model: "llama3:8b"
+
+# ---------------------------------------------------------
+# OPTIONAL: Alert thresholds for resource usage.
+# The benchmark continues even when thresholds are exceeded;
+# a warning is displayed and the event is logged.
+# cpu_percent / gpu_percent: 0–100
+# ram_mb / vram_mb: positive number (megabytes)
+# ---------------------------------------------------------
+resource_thresholds:
+  cpu_percent: 90.0
+  gpu_percent: 95.0
+  ram_mb: 7500.0
+  vram_mb: 6000.0
+
+# ---------------------------------------------------------
+# OPTIONAL: Path to the SQLite database file.
+# Created automatically if it does not exist.
+# Default: "benchmark.db" in the working directory.
+# ---------------------------------------------------------
+database_path: "benchmark.db"
+
+# ---------------------------------------------------------
+# OPTIONAL: Directory containing evaluator plugin files.
+# Each .py file in this directory is loaded at startup.
+# Plugins must implement: evaluate(question, response) -> float
+# ---------------------------------------------------------
+# plugins_dir: "./plugins"
+
+# ---------------------------------------------------------
+# OPTIONAL: Maximum number of process-restart attempts per
+# model when a crash is detected during inference.
+# Default: 3
+# ---------------------------------------------------------
+max_retries: 3
+
+# ---------------------------------------------------------
+# OPTIONAL: Base URL of the running Ollama instance.
+# Default: "http://localhost:11434"
+# ---------------------------------------------------------
+ollama_base_url: "http://localhost:11434"
