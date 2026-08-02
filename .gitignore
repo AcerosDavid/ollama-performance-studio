@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+*.whl
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+
+# Testing & coverage
+.pytest_cache/
+.hypothesis/
+.coverage
+htmlcov/
+coverage.xml
+*.cover
+
+# IDE / editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Project-specific: generated at runtime, may contain local paths or personal data
+logs/
+results/
+benchmark.db
+*.db
+
+# OS
+.DS_Store
+Thumbs.db
