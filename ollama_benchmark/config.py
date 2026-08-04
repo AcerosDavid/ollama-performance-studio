@@ -124,6 +124,7 @@ class BenchmarkConfig(BaseModel):
     plugins_dir: Optional[str] = None
     max_retries: int = 3
     ollama_base_url: str = "http://localhost:11434"
+    parallel_downloads: int = 3
 
     @field_validator("models")
     @classmethod
@@ -132,6 +133,15 @@ class BenchmarkConfig(BaseModel):
         if len(value) == 0:
             raise ValueError(
                 "Field 'models' has value [] which must contain at least 1 model"
+            )
+        return value
+
+    @field_validator("parallel_downloads")
+    @classmethod
+    def _validate_parallel_downloads(cls, value: int) -> int:
+        if not (1 <= value <= 10):
+            raise ValueError(
+                f"Field 'parallel_downloads' has value {value!r} which is out of range [1, 10]"
             )
         return value
 
