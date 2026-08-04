@@ -45,6 +45,9 @@ class BenchmarkRunner:
     def __init__(self, config: BenchmarkConfig, db: Database) -> None:
         self._config = config
         self._db = db
+        self._phase_callback = None   # callable(model_name, phase)
+        self._prompt_callback = None  # callable(model_name, prompt_idx, category)
+        self.on_mm_created = None     # callable(ModelManager) — called right after MM is built
 
     # ------------------------------------------------------------------
     # Hardware detection (Requirements 1.1, 1.2, 1.3, 1.4)
@@ -156,7 +159,12 @@ class BenchmarkRunner:
     # Task 11.2 — Full per-model evaluation pipeline
     # ------------------------------------------------------------------
 
-    def _evaluate_model(self, model_name: str, session_id: int) -> ModelResult:
+    def _evaluate_model(
+        self,
+        model_name: str,
+        session_id: int,
+        prefetched_pull: "Optional[PullResult]" = None,
+    ) -> ModelResult:
         """Run the full evaluation pipeline for one model.
 
         Steps: pull → start+verify → monitor+infer → quality → stop+remove.
@@ -171,6 +179,7 @@ class BenchmarkRunner:
         from ollama_benchmark.inference_engine import InferenceEngine
         from ollama_benchmark.quality_evaluator import QualityEvaluator
         from ollama_benchmark.score_engine import ScoreEngine
+        from ollama_benchmark.models import PullResult
 
         robustness = RobustnessMetrics(
             total_errors=0, total_timeouts=0, oom_count=0,
@@ -183,8 +192,23 @@ class BenchmarkRunner:
         model_run_id = None
 
         mm = ModelManager(base_url=self._config.ollama_base_url)
+        if self.on_mm_created:
+            self.on_mm_created(mm)
         monitor = ResourceMonitor()
         engine = InferenceEngine(base_url=self._config.ollama_base_url, db=self._db)
+
+        # Wire prompt-level progress callback into the engine
+        if self._prompt_callback:
+            _runner_prompt_cb = self._prompt_callback
+            _total_prompts_for_cb = sum(len(v) for v in self._config.prompts.values())
+            _completed_so_far = [0]
+
+            def _engine_prompt_cb(model: str, idx: int, total: int, category: str) -> None:
+                _completed_so_far[0] += 1
+                _runner_prompt_cb(model, _completed_so_far[0], category)
+
+            engine.on_prompt_complete = _engine_prompt_cb
+
         evaluator = QualityEvaluator(
             judge_model=self._config.judge_model,
             base_url=self._config.ollama_base_url,
@@ -192,8 +216,17 @@ class BenchmarkRunner:
             judge_timeout=self._config.timeouts.judge,
         )
 
-        # ---- 1. Pull ----
-        pull_result = mm.pull(model_name, timeout=self._config.timeouts.download)
+        # ---- 1. Pull (skip if already pre-downloaded) ----
+        if prefetched_pull is not None:
+            # Already downloaded in the parallel pre-download phase
+            pull_result = prefetched_pull
+            if self._phase_callback:
+                self._phase_callback(model_name, "start")  # skip directly to start
+        else:
+            if self._phase_callback:
+                self._phase_callback(model_name, "pull")
+            pull_result = mm.pull(model_name, timeout=self._config.timeouts.download)
+
         if not pull_result.success:
             logger.error(
                 "Pull failed for %r: %s — skipping", model_name, pull_result.error
@@ -214,6 +247,8 @@ class BenchmarkRunner:
             )
 
         # ---- 2. Start + verify (with crash-restart up to max_retries) ----
+        if prefetched_pull is None and self._phase_callback:
+            self._phase_callback(model_name, "start")
         cold_start_s = None
         restarts = 0
         max_retries = self._config.max_retries
@@ -275,6 +310,8 @@ class BenchmarkRunner:
             model_run_id = None
 
         # ---- 4. Monitor + Infer ----
+        if self._phase_callback:
+            self._phase_callback(model_name, "infer")
         # Build flat prompt list: [(category, PromptEntry), ...]
         flat_prompts = [
             (cat, pe)
@@ -302,10 +339,11 @@ class BenchmarkRunner:
                         model_run_id=model_run_id,
                     )
                 )
-                # run_prompt returns a single InferenceResult; guard against
-                # test mocks that return a list or None
                 if isinstance(raw, _InferenceResult):
                     first_result = raw
+                    # Fire prompt callback for first prompt
+                    if self._prompt_callback:
+                        self._prompt_callback(model_name, 1, flat_prompts[0][0])
             except Exception as exc:  # noqa: BLE001
                 logger.error(
                     "Inference error on first prompt for %r: %s", model_name, exc
@@ -350,6 +388,8 @@ class BenchmarkRunner:
         )
 
         # ---- 5. Quality evaluation ----
+        if self._phase_callback:
+            self._phase_callback(model_name, "score")
         # Build a mapping: prompt_text -> (category, expected_answer)
         prompt_map = {
             pe.text: (cat, pe.expected_answer) for cat, pe in flat_prompts
@@ -433,18 +473,36 @@ class BenchmarkRunner:
         return final_result
 
     # ------------------------------------------------------------------
+    # Download helper (used in parallel pre-download phase)
+    # ------------------------------------------------------------------
+
+    def _pull_model(self, model_name: str) -> "PullResult":
+        """Pull a single model. Wires on_mm_created so the CLI can track progress."""
+        from ollama_benchmark.model_manager import ModelManager
+        mm = ModelManager(base_url=self._config.ollama_base_url)
+        if self.on_mm_created:
+            self.on_mm_created(mm)
+        if self._phase_callback:
+            self._phase_callback(model_name, "pull")
+        return mm.pull(model_name, timeout=self._config.timeouts.download)
+
+    # ------------------------------------------------------------------
     # Task 11.3 — Main benchmark session loop
     # ------------------------------------------------------------------
 
     def run(self) -> SessionResult:
-        """Full benchmark session: detect hardware, iterate models, rank, report.
+        """Full benchmark session: detect hardware, parallel-download, evaluate, rank.
 
-        Requirements: 12.1
+        Downloads up to ``config.parallel_downloads`` models simultaneously,
+        then evaluates them sequentially (Ollama can only run one model at a time).
         """
         import json
+        import threading
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         from ollama_benchmark.score_engine import ScoreEngine
+        from ollama_benchmark.models import PullResult
 
-        # 1. Detect hardware (raises OllamaUnavailableError → non-zero exit)
+        # 1. Detect hardware
         hardware = self._detect_hardware()
         logger.info("Hardware detected: %s", hardware)
 
@@ -453,15 +511,44 @@ class BenchmarkRunner:
         session_id = self._db.create_session(hardware, config_snapshot)
         logger.info("Session %d started", session_id)
 
-        model_results: list[ModelResult] = []
+        models = self._config.models
+        max_parallel = max(1, self._config.parallel_downloads)
 
-        # 3. Evaluate each model
-        for model_name in self._config.models:
+        # 3. Pre-download all models in parallel (up to max_parallel at a time)
+        pull_results: dict[str, PullResult] = {}
+        pull_lock = threading.Lock()
+
+        def _pull_one(model_name: str) -> tuple[str, PullResult]:
+            result = self._pull_model(model_name)
+            return model_name, result
+
+        logger.info(
+            "Pre-downloading %d model(s) with parallel_downloads=%d",
+            len(models), max_parallel,
+        )
+        with ThreadPoolExecutor(max_workers=max_parallel) as pool:
+            futures = {pool.submit(_pull_one, m): m for m in models}
+            for fut in as_completed(futures):
+                model_name, pull_result = fut.result()
+                with pull_lock:
+                    pull_results[model_name] = pull_result
+                logger.info(
+                    "Pull finished for %r: success=%s", model_name, pull_result.success
+                )
+                # Emit "queued" event to show model is ready but waiting
+                if pull_result.success and self._phase_callback:
+                    self._phase_callback(model_name, "queued")
+
+        # 4. Evaluate each model sequentially (using cached pull results)
+        model_results: list[ModelResult] = []
+        for model_name in models:
             logger.info("Evaluating model: %s", model_name)
             try:
-                result = self._evaluate_model(model_name, session_id)
+                result = self._evaluate_model(
+                    model_name, session_id,
+                    prefetched_pull=pull_results.get(model_name),
+                )
                 model_results.append(result)
-                # Update the preliminary row (or insert if pull/cold-start failed early)
                 self._db.save_model_result(
                     session_id, result, model_run_id=result.model_run_id
                 )
@@ -470,14 +557,14 @@ class BenchmarkRunner:
                     "Unexpected error evaluating %r: %s — continuing", model_name, exc
                 )
 
-        # 4. Compute rankings
+        # 5. Compute rankings
         score_engine = ScoreEngine(self._db)
         score_engine.compute_rankings(session_id)
 
-        # 5. Generate recommendations
+        # 6. Generate recommendations
         score_engine.generate_recommendations(session_id)
 
-        # 6. Finalize session
+        # 7. Finalize session
         self._db.finalize_session(session_id)
         logger.info("Session %d completed", session_id)
 
