@@ -14,6 +14,7 @@ ColdStartTimeoutError — raised by start_and_verify on timeout
 from __future__ import annotations
 
 import logging
+import json
 import subprocess
 import threading
 import time
@@ -127,36 +128,33 @@ class ModelManager:
 
     def __init__(self, base_url: str = "http://localhost:11434") -> None:
         self._base_url = base_url
-        #: The running ``ollama run`` subprocess, set by ``start_and_verify``
-        #: and consumed by ``stop_and_remove`` (task 7.3).
         self._active_process: Optional[subprocess.Popen] = None
+        self._pull_progress: dict = {"status": "", "completed": 0, "total": 0}
+        # Optional callback: called with (completed_bytes, total_bytes, status_str)
+        self.on_pull_progress = None
 
     # ------------------------------------------------------------------
     # Task 7.1 — pull
     # ------------------------------------------------------------------
 
     def pull(self, model: str, timeout: int = 3600) -> PullResult:
-        """Run ``ollama pull <model>`` as an automatic subprocess.
+        """Pull *model* via the Ollama REST API (POST /api/pull, NDJSON stream).
 
-        Behaviour
-        ---------
-        - Streams stdout/stderr to the console in real time so the user can
-          observe download progress without any prompting.
-        - Records ``download_time_s`` from subprocess start to completion.
-        - After a successful pull, queries ``ollama show`` for the on-disk
-          size and populates ``model_size_gb`` (``None`` when unavailable).
-        - Returns ``PullResult(success=True, ...)`` on zero exit code.
-        - Returns ``PullResult(success=False, ...)`` on non-zero exit or
-          ``subprocess.TimeoutExpired``; the failing model is **not** re-tried
-          here — the caller (BenchmarkRunner) decides whether to skip it.
+        Uses the HTTP API instead of the CLI subprocess so we can:
+        - Suppress all terminal escape sequences / spinners from ``ollama pull``
+        - Parse per-layer download progress (``completed`` / ``total`` bytes)
+        - Report structured progress to callers via ``self._pull_progress``
 
-        Parameters
-        ----------
-        model:
-            The Ollama model tag to pull, e.g. ``"llama3:8b"``.
-        timeout:
-            Maximum seconds to wait for the pull to complete.
-            Defaults to 3600 s when not configured.
+        ``self._pull_progress`` is updated as a dict::
+
+            {
+                "status":    str,   # e.g. "pulling 183715c43589"
+                "completed": int,   # bytes downloaded so far
+                "total":     int,   # total bytes for current layer (0 if unknown)
+            }
+
+        Falls back to subprocess ``ollama pull`` if the HTTP request fails
+        (e.g. Ollama version too old).
 
         Returns
         -------
@@ -164,11 +162,68 @@ class ModelManager:
             Populated DTO describing the outcome of the pull operation.
         """
         logger.info("Pulling model %r (timeout=%ds) …", model, timeout)
-        logger.debug("[CMD] ollama pull %s", model)
+        self._pull_progress: dict = {"status": "starting", "completed": 0, "total": 0}
 
-        output_lines: list[str] = []
         t_start = time.perf_counter()
 
+        try:
+            with httpx.Client(timeout=httpx.Timeout(timeout)) as client:
+                with client.stream(
+                    "POST",
+                    f"{self._base_url}/api/pull",
+                    json={"name": model, "stream": True},
+                ) as resp:
+                    resp.raise_for_status()
+                    for raw_line in resp.iter_lines():
+                        raw_line = raw_line.strip()
+                        if not raw_line:
+                            continue
+                        try:
+                            chunk = json.loads(raw_line)
+                        except json.JSONDecodeError:
+                            continue
+                        status = chunk.get("status", "")
+                        completed = chunk.get("completed", 0) or 0
+                        total = chunk.get("total", 0) or 0
+                        self._pull_progress = {
+                            "status": status,
+                            "completed": completed,
+                            "total": total,
+                        }
+                        if self.on_pull_progress:
+                            self.on_pull_progress(completed, total, status)
+                        logger.debug("[pull] %s  %d/%d", status, completed, total)
+                        if chunk.get("error"):
+                            raise RuntimeError(chunk["error"])
+
+            download_time_s = time.perf_counter() - t_start
+            model_size_gb = _get_model_size_gb(model)
+            logger.info(
+                "Pull of %r completed in %.1fs (size=%.2f GB)",
+                model, download_time_s,
+                model_size_gb if model_size_gb is not None else 0.0,
+            )
+            return PullResult(
+                model_name=model,
+                success=True,
+                download_time_s=download_time_s,
+                model_size_gb=model_size_gb,
+                error=None,
+            )
+
+        except Exception as exc:  # noqa: BLE001
+            # Fallback to subprocess if HTTP API fails
+            logger.warning(
+                "HTTP pull failed (%s), falling back to subprocess ollama pull", exc
+            )
+            return self._pull_subprocess(model, timeout, t_start)
+
+    def _pull_subprocess(
+        self, model: str, timeout: int, t_start: float
+    ) -> PullResult:
+        """Fallback: run ``ollama pull`` as a subprocess, output to log only."""
+        logger.debug("[CMD] ollama pull %s", model)
+        output_lines: list[str] = []
         try:
             process = subprocess.Popen(
                 ["ollama", "pull", model],
@@ -176,79 +231,38 @@ class ModelManager:
                 stderr=subprocess.STDOUT,
                 text=True,
                 encoding="utf-8",
-                errors="replace",  # Replace problematic characters instead of failing
-                bufsize=1,  # line-buffered
+                errors="replace",
+                bufsize=1,
             )
-
-            # Stream output to console in real time
-            assert process.stdout is not None  # always set when PIPE is used
+            assert process.stdout is not None
             for line in process.stdout:
-                print(line, end="", flush=True)
+                logger.debug("[pull] %s", line.rstrip())
                 output_lines.append(line)
-
             process.wait(timeout=timeout)
             download_time_s = time.perf_counter() - t_start
-
             if process.returncode != 0:
-                last_line = output_lines[-1].strip() if output_lines else "unknown error"
-                logger.error(
-                    "ollama pull %r failed (exit %d): %s",
-                    model,
-                    process.returncode,
-                    last_line,
-                )
-                return PullResult(
-                    model_name=model,
-                    success=False,
-                    download_time_s=download_time_s,
-                    model_size_gb=None,
-                    error=last_line,
-                )
-
+                err = output_lines[-1].strip() if output_lines else "unknown error"
+                return PullResult(model_name=model, success=False,
+                                  download_time_s=download_time_s,
+                                  model_size_gb=None, error=err)
         except subprocess.TimeoutExpired:
             download_time_s = time.perf_counter() - t_start
-            logger.error(
-                "ollama pull %r timed out after %ds", model, timeout
-            )
             try:
-                process.kill()
-                process.wait()
-            except Exception:  # noqa: BLE001
-                pass
-            return PullResult(
-                model_name=model,
-                success=False,
-                download_time_s=download_time_s,
-                model_size_gb=None,
-                error="timeout",
-            )
-
+                process.kill(); process.wait()
+            except Exception: pass  # noqa: E722
+            return PullResult(model_name=model, success=False,
+                              download_time_s=download_time_s,
+                              model_size_gb=None, error="timeout")
         except Exception as exc:  # noqa: BLE001
             download_time_s = time.perf_counter() - t_start
-            logger.error("ollama pull %r raised an unexpected error: %s", model, exc)
-            return PullResult(
-                model_name=model,
-                success=False,
-                download_time_s=download_time_s,
-                model_size_gb=None,
-                error=str(exc),
-            )
-
-        # Pull succeeded — try to get disk size
+            return PullResult(model_name=model, success=False,
+                              download_time_s=download_time_s,
+                              model_size_gb=None, error=str(exc))
         model_size_gb = _get_model_size_gb(model)
-        logger.info(
-            "Pull of %r completed in %.1fs (size=%.2f GB)",
-            model,
-            download_time_s,
-            model_size_gb if model_size_gb is not None else 0.0,
-        )
-        return PullResult(
-            model_name=model,
-            success=True,
-            download_time_s=download_time_s,
-            model_size_gb=model_size_gb,
-            error=None,
-        )
+        logger.info("Pull of %r completed in %.1fs", model, download_time_s)
+        return PullResult(model_name=model, success=True,
+                          download_time_s=download_time_s,
+                          model_size_gb=model_size_gb, error=None)
 
     # ------------------------------------------------------------------
     # Task 7.2 — start_and_verify
@@ -308,12 +322,12 @@ class ModelManager:
         )
         self._active_process = process
 
-        # --- 2. Background thread: stream subprocess output to console ---
+        # --- 2. Background thread: send subprocess output to log only ---
         def _stream_output(proc: subprocess.Popen) -> None:
             assert proc.stdout is not None
             try:
                 for line in proc.stdout:
-                    print(line, end="", flush=True)
+                    logger.debug("[ollama run] %s", line.rstrip())
             except ValueError:
                 # stdout was closed before the loop finished — harmless
                 pass
@@ -457,10 +471,10 @@ class ModelManager:
                 errors="replace",
             )
 
-            # --- 3. Print output to console for visibility ---
+            # Log output only — no print to console
             assert rm_proc.stdout is not None
             for line in rm_proc.stdout:
-                print(line, end="", flush=True)
+                logger.debug("[rm] %s", line.rstrip())
 
             rm_proc.wait(timeout=60)
 
