@@ -12,10 +12,12 @@
 models:
 - qwen:0.5b-chat-v1.5-q3_K_M
 - qwen:0.5b-chat-v1.5-q3_K_L
+- qwen2.5:1.5b
 - qwen:0.5b-chat-v1.5-q4_0
 - qwen:0.5b-chat-v1.5-q4_1
 - qwen:0.5b-chat-v1.5-q4_K_S
 - qwen:0.5b-chat-v1.5-q4_K_M
+
 
 
 # ---------------------------------------------------------
@@ -83,7 +85,7 @@ prompts:
 timeouts:
   download: 3600      # Maximum time to wait for `ollama pull` to complete
   cold_start: 120     # Maximum time from model launch to first response
-  inference: 20       # Maximum time per individual prompt inference 
+  inference: 30       # Maximum time per individual prompt inference 
   judge: 30           # Maximum time to wait for the judge model response
 
 # ---------------------------------------------------------
@@ -127,6 +129,14 @@ database_path: "benchmark.db"
 # Default: 3
 # ---------------------------------------------------------
 max_retries: 3
+
+# ---------------------------------------------------------
+# OPTIONAL: Number of models to download in parallel before
+# sequential evaluation begins.
+# Range: 1–10. Default: 3
+# Set to 1 to disable parallel downloads.
+# ---------------------------------------------------------
+parallel_downloads: 3
 
 # ---------------------------------------------------------
 # OPTIONAL: Base URL of the running Ollama instance.
