@@ -67,8 +67,10 @@ class InferenceEngine:
         db=None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
-        self._db = db  # optional Database for persisting results
+        self._db = db
         self._last_avg_latency_ms: float = 0.0
+        # Optional callback(model, prompt_idx, total, category) called after each prompt
+        self.on_prompt_complete = None
 
     # ------------------------------------------------------------------
     # Public async interface
@@ -177,7 +179,7 @@ class InferenceEngine:
         """
         results: list[InferenceResult] = []
 
-        for category, prompt_entry in prompts:
+        for idx, (category, prompt_entry) in enumerate(prompts, start=1):
             result = await self.run_prompt(
                 model,
                 prompt_entry.text,
@@ -186,6 +188,8 @@ class InferenceEngine:
                 model_run_id=model_run_id,
             )
             results.append(result)
+            if self.on_prompt_complete:
+                self.on_prompt_complete(model, idx, len(prompts), category)
 
         # Compute avg_latency_ms from non-None total_response_ms values
         # (Requirements 5.5 and 5.6)
